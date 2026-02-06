@@ -1,0 +1,83 @@
+# ============================================================
+# GitHub Actions — 自动构建 Docker 镜像
+#
+# 【触发时机】
+# 推送到 main 分支时自动构建，构建完成后推送镜像到 GitHub Container Registry (ghcr.io)
+#
+# 【什么是 GitHub Container Registry？】
+# GitHub 提供的免费 Docker 镜像仓库。
+# 构建好的镜像存在 ghcr.io/你的用户名/镜像名:tag
+# 你的服务器可以直接 docker pull 拉取。
+#
+# 【流程】
+# 1. 推送代码到 main → 自动触发
+# 2. GitHub 服务器编译前端和后端 Docker 镜像
+# 3. 推送镜像到 ghcr.io
+# 4. 你在服务器上 docker compose pull && docker compose up -d 即可更新
+# ============================================================
+
+name: Build Docker Images
+
+on:
+  push:
+    branches: [main]
+  # 也可以手动触发
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-server:
+    name: Build Server Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push server image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}-server:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}-server:${{ github.sha }}
+
+  build-web:
+    name: Build Web Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}-web:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}-web:${{ github.sha }}
