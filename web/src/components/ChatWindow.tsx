@@ -16,7 +16,7 @@
  * AI 的回复会作为一条特殊样式的消息出现在聊天里。
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { getMessages, type Chat, type Message } from '../lib/api';
 import { getSocket } from '../lib/socket';
 
@@ -30,22 +30,32 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
-  const [aiThinking, setAiThinking] = useState(false); // AI 是否正在思考
+  const [aiThinking, setAiThinking] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const isInitialLoad = useRef(true); // 是否是初次加载（用于区分初始滚动和新消息滚动）
 
   // ========== 加载历史消息（切换聊天时触发）==========
   useEffect(() => {
+    isInitialLoad.current = true;
     setMessages([]);
     setAiThinking(false);
     loadMessages();
   }, [chat.id]);
 
+  // 初次加载时，在浏览器绘制前就滚到底部（用户完全看不到滚动过程）
+  useLayoutEffect(() => {
+    if (isInitialLoad.current && messages.length > 0 && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      isInitialLoad.current = false;
+    }
+  }, [messages]);
+
   async function loadMessages() {
     try {
       const data = await getMessages(chat.id);
       setMessages(data);
-      scrollToBottom(true);  // 加载历史时直接跳到底部，不要动画
     } catch (err) {
       console.error('加载消息失败', err);
     }
@@ -238,7 +248,7 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
       </div>
 
       {/* 消息列表 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
         {messages.map(renderMessage)}
 
         {/* AI 思考中的加载动画 */}
