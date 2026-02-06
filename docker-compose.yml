@@ -1,0 +1,73 @@
+# ============================================================
+# Docker Compose — 一条命令启动所有服务
+#
+# 【什么是 Docker Compose？】
+# 一个管理多个 Docker 容器的工具。
+# 这个项目需要 4 个服务协同工作：数据库、后端、前端、Redis。
+# docker-compose 让它们一键启动、自动组网、互相通信。
+#
+# 【1Panel 部署】
+# 1Panel 支持直接导入 docker-compose.yml 创建应用。
+# 把这个文件上传到 1Panel → 容器 → Compose → 创建即可。
+#
+# 【使用方法】
+# 启动：docker compose up -d
+# 停止：docker compose down
+# 查看日志：docker compose logs -f
+# 重建：docker compose up -d --build
+# ============================================================
+
+services:
+  # ========== PostgreSQL 数据库 ==========
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chatgroup
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-chatgroup123}
+      POSTGRES_DB: chatgroup
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatgroup"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ========== Redis（在线状态、缓存）==========
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  # ========== 后端 API + WebSocket ==========
+  server:
+    build: ./server
+    # 如果用 GitHub Actions 构建的镜像，改成：
+    # image: ghcr.io/kaine665/chat-group-server:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://chatgroup:${DB_PASSWORD:-chatgroup123}@db:5432/chatgroup
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-in-production}
+      PORT: "3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  # ========== 前端（Nginx）==========
+  web:
+    build: ./web
+    # 如果用 GitHub Actions 构建的镜像，改成：
+    # image: ghcr.io/kaine665/chat-group-web:latest
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    depends_on:
+      - server
+
+volumes:
+  postgres_data:
+  redis_data:
