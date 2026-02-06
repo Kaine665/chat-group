@@ -45,7 +45,7 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
     try {
       const data = await getMessages(chat.id);
       setMessages(data);
-      scrollToBottom();
+      scrollToBottom(true);  // 加载历史时直接跳到底部，不要动画
     } catch (err) {
       console.error('加载消息失败', err);
     }
@@ -141,10 +141,11 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
     }
   }
 
-  function scrollToBottom() {
+  // instant=true 时直接跳到底部（加载历史消息时），false 时平滑滚动（收到新消息时）
+  function scrollToBottom(instant = false) {
     setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 100);
+      messagesEndRef.current?.scrollIntoView(instant ? { behavior: 'instant' as ScrollBehavior } : { behavior: 'smooth' });
+    }, 50);
   }
 
   function formatTime(dateStr: string) {
