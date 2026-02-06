@@ -218,7 +218,7 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
   }
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
       {/* 聊天标题栏 */}
       <div className="h-14 border-b border-gray-200 flex items-center justify-between px-4 bg-white shrink-0">
         <div className="flex items-center gap-3">
