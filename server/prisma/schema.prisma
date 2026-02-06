@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 用户 ====================
+
+model User {
+  id            String         @id @default(uuid())
+  username      String         @unique
+  email         String         @unique
+  password      String         // bcrypt 哈希后的密码，明文永远不存数据库
+
+  avatar        String?
+  lastSeenAt    DateTime?
+
+  sentRequests     FriendRequest[]  @relation("RequestSender")
+  receivedRequests FriendRequest[]  @relation("RequestReceiver")
+  chatMembers      ChatMember[]
+  messages         Message[]
+  summaries        AISummary[]
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+// ==================== 好友 ====================
+
+model FriendRequest {
+  id         String              @id @default(uuid())
+  senderId   String
+  receiverId String
+  status     FriendRequestStatus @default(PENDING)
+
+  sender     User @relation("RequestSender", fields: [senderId], references: [id])
+  receiver   User @relation("RequestReceiver", fields: [receiverId], references: [id])
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([senderId, receiverId])
+}
+
+enum FriendRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+// ==================== 聊天 ====================
+
+model Chat {
+  id        String       @id @default(uuid())
+  name      String?      // 群聊名称，私聊为 null
+  type      ChatType     @default(DIRECT)
+
+  members   ChatMember[]
+  messages  Message[]
+  summaries AISummary[]
+
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model ChatMember {
+  id           String   @id @default(uuid())
+  userId       String
+  chatId       String
+  lastReadAt   DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id])
+  chat         Chat     @relation(fields: [chatId], references: [id])
+
+  joinedAt     DateTime @default(now())
+
+  @@unique([userId, chatId])
+}
+
+enum ChatType {
+  DIRECT
+  GROUP
+}
+
+// ==================== 消息 ====================
+
+model Message {
+  id        String      @id @default(uuid())
+  content   String
+  type      MessageType @default(TEXT)
+
+  senderId  String
+  chatId    String
+
+  sender    User        @relation(fields: [senderId], references: [id])
+  chat      Chat        @relation(fields: [chatId], references: [id])
+
+  createdAt DateTime    @default(now())
+
+  @@index([chatId, createdAt])
+}
+
+enum MessageType {
+  TEXT
+  SYSTEM
+  AI_SUMMARY
+}
+
+// ==================== AI 总结 ====================
+
+model AISummary {
+  id            String   @id @default(uuid())
+  chatId        String
+  triggeredById String
+
+  fromMessageId String?
+  toMessageId   String?
+  messageCount  Int
+
+  content       Json
+
+  chat          Chat     @relation(fields: [chatId], references: [id])
+  triggeredBy   User     @relation(fields: [triggeredById], references: [id])
+
+  createdAt     DateTime @default(now())
+
+  @@index([chatId, createdAt])
+}
