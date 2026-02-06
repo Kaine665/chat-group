@@ -23,6 +23,7 @@ model User {
   chatMembers      ChatMember[]
   messages         Message[]
   summaries        AISummary[]
+  aiConfig         UserAIConfig?   // 用户的 AI 服务配置（一对一关系）
 
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
@@ -107,6 +108,24 @@ enum MessageType {
   TEXT
   SYSTEM
   AI_SUMMARY
+}
+
+// ==================== 用户 AI 配置 ====================
+// 每个用户可以保存自己的 AI 服务商设置
+// 一个用户只有一条配置记录（@unique on userId）
+
+model UserAIConfig {
+  id        String   @id @default(uuid())
+  userId    String   @unique     // 一个用户只有一条配置
+  provider  String               // 提供商 ID：deepseek, openai, kimi, doubao, claude
+  model     String               // 模型 ID：如 deepseek-chat, gpt-4o
+  apiKey    String               // 用户的 API Key（生产环境应加密）
+  baseUrl   String?              // 自定义 API 地址（可选，覆盖默认值）
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ==================== AI 总结 ====================

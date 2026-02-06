@@ -7,17 +7,13 @@
  * 3. 发送消息（WebSocket）
  * 4. 自动滚动到最新消息
  * 5. 输入状态提示（"对方正在输入..."）
+ * 6. AI 消息的特殊显示样式
+ * 7. AI 正在思考的加载状态
  *
- * 【useEffect 依赖数组】
- * useEffect(() => { ... }, [chatId])
- *                           ^^^^^^^^ 依赖数组
- * - [] 空数组：只在组件挂载时执行一次
- * - [chatId]：chatId 变化时重新执行
- * - 不写：每次渲染都执行（几乎不用）
- *
- * 【useRef 的用途】
- * - messagesEndRef：指向消息列表底部的空 div，调用 scrollIntoView() 自动滚到底
- * - 和 useState 的区别：ref 变化不会触发重新渲染
+ * 【AI 唤醒词】
+ * 在输入框输入 "@ai 你的问题" 然后发送，
+ * 服务器会检测到 @ai 前缀，调用 AI 处理，
+ * AI 的回复会作为一条特殊样式的消息出现在聊天里。
  */
 
 import { useState, useEffect, useRef } from 'react';
@@ -33,13 +29,15 @@ interface Props {
 export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [typing, setTyping] = useState(false); // 对方是否正在输入
+  const [typing, setTyping] = useState(false);
+  const [aiThinking, setAiThinking] = useState(false); // AI 是否正在思考
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // ========== 加载历史消息（切换聊天时触发）==========
   useEffect(() => {
-    setMessages([]); // 先清空
+    setMessages([]);
+    setAiThinking(false);
     loadMessages();
   }, [chat.id]);
 
@@ -63,8 +61,6 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
       if (data.message.chatId === chat.id) {
         setMessages((prev) => [...prev, data.message]);
         scrollToBottom();
-
-        // 标记已读
         socket.emit('mark_read', { chatId: chat.id });
       }
     };
@@ -73,7 +69,6 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
     const handleTyping = (data: { chatId: string; userId: string }) => {
       if (data.chatId === chat.id && data.userId !== currentUserId) {
         setTyping(true);
-        // 3 秒后自动取消"正在输入"
         clearTimeout(typingTimeoutRef.current);
         typingTimeoutRef.current = setTimeout(() => setTyping(false), 3000);
       }
@@ -86,18 +81,34 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
       }
     };
 
+    // AI 正在思考
+    const handleAIThinking = (data: { chatId: string }) => {
+      if (data.chatId === chat.id) {
+        setAiThinking(true);
+      }
+    };
+
+    // AI 思考完毕
+    const handleAIThinkingDone = (data: { chatId: string }) => {
+      if (data.chatId === chat.id) {
+        setAiThinking(false);
+      }
+    };
+
     socket.on('new_message', handleNewMessage);
     socket.on('typing', handleTyping);
     socket.on('typing_stop', handleTypingStop);
+    socket.on('ai_thinking', handleAIThinking);
+    socket.on('ai_thinking_done', handleAIThinkingDone);
 
-    // 进入聊天时标记已读
     socket.emit('mark_read', { chatId: chat.id });
 
-    // 组件卸载时取消监听（防止内存泄漏）
     return () => {
       socket.off('new_message', handleNewMessage);
       socket.off('typing', handleTyping);
       socket.off('typing_stop', handleTypingStop);
+      socket.off('ai_thinking', handleAIThinking);
+      socket.off('ai_thinking_done', handleAIThinkingDone);
     };
   }, [chat.id, currentUserId]);
 
@@ -114,12 +125,10 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
       content: input.trim(),
     });
 
-    // 停止输入状态
     socket.emit('typing_stop', { chatId: chat.id });
     setInput('');
   }
 
-  // 输入时发送"正在输入"事件
   function handleInputChange(value: string) {
     setInput(value);
     const socket = getSocket();
@@ -138,7 +147,6 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
     }, 100);
   }
 
-  // 格式化时间：只显示时分
   function formatTime(dateStr: string) {
     return new Date(dateStr).toLocaleTimeString('zh-CN', {
       hour: '2-digit',
@@ -146,55 +154,106 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
     });
   }
 
+  // ========== 渲染消息 ==========
+  function renderMessage(msg: Message) {
+    const isMine = msg.senderId === currentUserId;
+    const isAI = msg.type === 'AI_SUMMARY';
+
+    // AI 消息 — 特殊样式，居中显示，紫色主题
+    if (isAI) {
+      return (
+        <div key={msg.id} className="flex justify-center my-2">
+          <div className="max-w-[85%] w-full">
+            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl px-4 py-3">
+              {/* AI 标识 */}
+              <div className="flex items-center gap-2 mb-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                  AI 助手
+                </span>
+                <span className="text-xs text-gray-400">
+                  {formatTime(msg.createdAt)}
+                </span>
+              </div>
+              {/* AI 回复内容 — 保留换行 */}
+              <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">
+                {msg.content}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // 普通消息
+    return (
+      <div
+        key={msg.id}
+        className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
+      >
+        <div className={`max-w-[70%] ${isMine ? 'order-2' : ''}`}>
+          {!isMine && (
+            <div className="text-xs text-gray-400 mb-1 ml-1">
+              {msg.sender.username}
+            </div>
+          )}
+          <div
+            className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
+              isMine
+                ? 'bg-blue-600 text-white rounded-br-md'
+                : 'bg-white text-gray-800 rounded-bl-md shadow-sm'
+            }`}
+          >
+            {msg.content}
+          </div>
+          <div
+            className={`text-xs text-gray-400 mt-1 ${
+              isMine ? 'text-right mr-1' : 'ml-1'
+            }`}
+          >
+            {formatTime(msg.createdAt)}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 flex flex-col">
       {/* 聊天标题栏 */}
-      <div className="h-14 border-b border-gray-200 flex items-center px-4 bg-white shrink-0">
-        <h2 className="font-medium text-gray-800">{chatDisplayName}</h2>
-        {typing && (
-          <span className="ml-3 text-xs text-gray-400">正在输入...</span>
-        )}
+      <div className="h-14 border-b border-gray-200 flex items-center justify-between px-4 bg-white shrink-0">
+        <div className="flex items-center gap-3">
+          <h2 className="font-medium text-gray-800">{chatDisplayName}</h2>
+          {typing && (
+            <span className="text-xs text-gray-400">正在输入...</span>
+          )}
+          {aiThinking && (
+            <span className="text-xs text-purple-500 animate-pulse">AI 正在思考...</span>
+          )}
+        </div>
+        {/* @ai 使用提示 */}
+        <span className="text-xs text-gray-400">
+          输入 @ai + 指令唤醒 AI
+        </span>
       </div>
 
       {/* 消息列表 */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
-        {messages.map((msg) => {
-          const isMine = msg.senderId === currentUserId;
-          return (
-            <div
-              key={msg.id}
-              className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
-            >
-              <div className={`max-w-[70%] ${isMine ? 'order-2' : ''}`}>
-                {/* 发送者名字（只显示对方的） */}
-                {!isMine && (
-                  <div className="text-xs text-gray-400 mb-1 ml-1">
-                    {msg.sender.username}
-                  </div>
-                )}
-                {/* 消息气泡 */}
-                <div
-                  className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                    isMine
-                      ? 'bg-blue-600 text-white rounded-br-md'
-                      : 'bg-white text-gray-800 rounded-bl-md shadow-sm'
-                  }`}
-                >
-                  {msg.content}
-                </div>
-                {/* 时间 */}
-                <div
-                  className={`text-xs text-gray-400 mt-1 ${
-                    isMine ? 'text-right mr-1' : 'ml-1'
-                  }`}
-                >
-                  {formatTime(msg.createdAt)}
-                </div>
+        {messages.map(renderMessage)}
+
+        {/* AI 思考中的加载动画 */}
+        {aiThinking && (
+          <div className="flex justify-center my-2">
+            <div className="bg-purple-50 border border-purple-200 rounded-xl px-4 py-3 flex items-center gap-2">
+              <div className="flex gap-1">
+                <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
               </div>
+              <span className="text-sm text-purple-600">AI 正在思考...</span>
             </div>
-          );
-        })}
-        {/* 这个空 div 用于自动滚动到底部 */}
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
@@ -205,7 +264,7 @@ export default function ChatWindow({ chat, currentUserId, chatDisplayName }: Pro
             type="text"
             value={input}
             onChange={(e) => handleInputChange(e.target.value)}
-            placeholder="输入消息..."
+            placeholder="输入消息...（输入 @ai 唤醒 AI 助手）"
             className="flex-1 px-4 py-2.5 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
           />
           <button

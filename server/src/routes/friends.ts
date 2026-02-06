@@ -11,6 +11,7 @@
 import { Router, Request, Response } from 'express';
 import prisma from '../services/prisma';
 import { auth } from '../middleware/auth';
+import { getIO, onlineUsers } from '../services/socketStore';
 
 const router = Router();
 
@@ -182,6 +183,37 @@ router.put('/request/:id/accept', auth, async (req: Request, res: Response) => {
 
       return { request: updated, chat };
     });
+
+    // ========== 关键修复：让双方实时加入新聊天房间 ==========
+    // 问题：Socket.io 的 Room 只在用户认证时加入（authenticate 事件）
+    // 如果 A 和 B 已经在线，这时才创建了新聊天，他们的 Socket 还没加入新 Room。
+    // 结果：发消息后对方收不到（因为 io.to('chat:xxx') 找不到他们）。
+    //
+    // 解决方案：接受好友后，立刻把双方的 Socket 加入新 Room，
+    // 并发送 new_chat_created 事件，让前端刷新聊天列表。
+    try {
+      const io = getIO();
+      const chatRoomName = `chat:${result.chat.id}`;
+
+      // 让发送者（发起好友申请的人）加入新房间
+      const senderSocketId = onlineUsers.get(request.senderId);
+      if (senderSocketId) {
+        const senderSocket = io.sockets.sockets.get(senderSocketId);
+        senderSocket?.join(chatRoomName);
+        io.to(senderSocketId).emit('new_chat_created', { chatId: result.chat.id });
+      }
+
+      // 让接收者（接受好友申请的人）加入新房间
+      const receiverSocketId = onlineUsers.get(request.receiverId);
+      if (receiverSocketId) {
+        const receiverSocket = io.sockets.sockets.get(receiverSocketId);
+        receiverSocket?.join(chatRoomName);
+        io.to(receiverSocketId).emit('new_chat_created', { chatId: result.chat.id });
+      }
+    } catch (socketErr) {
+      // Socket 通知失败不影响接受好友的结果
+      console.error('Socket 通知失败:', socketErr);
+    }
 
     res.json(result);
   } catch (err) {

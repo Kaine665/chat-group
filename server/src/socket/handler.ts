@@ -21,19 +21,27 @@
  * 每个 Chat 对应一个 Room。用户加入 Room 后，
  * 向 Room 广播的消息会发给 Room 内所有人。
  * 比如 Chat ID 是 "abc"，那 Room 名就是 "chat:abc"。
+ *
+ * 【AI 唤醒词机制】
+ * 当用户发送以 @ai 开头的消息时，服务器会：
+ * 1. 正常保存并广播这条消息
+ * 2. 检测到唤醒词后，异步调用 AI API
+ * 3. 把 AI 的回复作为一条新的 AI_SUMMARY 类型消息发到聊天里
+ * 这样所有人都能看到 AI 的回复，就像聊天里多了一个 AI 成员。
  */
 
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import prisma from '../services/prisma';
+import { onlineUsers, setIO } from '../services/socketStore';
+import { extractAICommand, callAI } from '../services/ai';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 
-// 在线用户映射：userId → socketId
-// 用于：查某个用户是否在线、向特定用户发消息
-const onlineUsers = new Map<string, string>();
-
 export function setupSocket(io: SocketIOServer) {
+  // 把 io 实例存到共享模块，让其他路由（如 friends.ts）也能使用
+  setIO(io);
+
   io.on('connection', (socket: Socket) => {
     console.log(`新连接: ${socket.id}`);
 
@@ -48,7 +56,7 @@ export function setupSocket(io: SocketIOServer) {
         const payload = jwt.verify(data.token, JWT_SECRET) as { userId: string };
         userId = payload.userId;
 
-        // 记录在线状态
+        // 记录在线状态（存到共享的 socketStore，让 friends 路由也能查到）
         onlineUsers.set(userId, socket.id);
 
         // 加入用户自己的所有聊天 Room
@@ -113,8 +121,17 @@ export function setupSocket(io: SocketIOServer) {
         });
 
         // 向聊天室所有成员广播新消息（包括发送者自己）
-        // io.to() 向房间里所有人发送，包括自己
         io.to(`chat:${data.chatId}`).emit('new_message', { message });
+
+        // ========== AI 唤醒词检测 ==========
+        // 检查消息是否以 @ai 开头
+        const aiCommand = extractAICommand(data.content);
+        if (aiCommand !== null) {
+          // 异步处理 AI 调用，不阻塞消息发送
+          handleAIWakeup(io, userId, data.chatId, aiCommand).catch((err) => {
+            console.error('AI 唤醒处理失败:', err);
+          });
+        }
       } catch (err) {
         console.error('发送消息失败:', err);
         socket.emit('error', { message: '发送消息失败' });
@@ -173,4 +190,128 @@ export function setupSocket(io: SocketIOServer) {
       }
     });
   });
+}
+
+/**
+ * 处理 AI 唤醒 — 调用 AI 并把回复发到聊天里
+ *
+ * 【流程】
+ * 1. 先发一条"AI 正在思考..."的提示（让用户知道 AI 在处理中）
+ * 2. 读取触发者的 AI 配置
+ * 3. 获取最近 30 条聊天记录作为上下文
+ * 4. 调用 AI API
+ * 5. 把 AI 回复作为 AI_SUMMARY 类型的消息保存并广播
+ *
+ * 如果触发者没有配置 AI，会提示他去设置。
+ */
+async function handleAIWakeup(
+  io: SocketIOServer,
+  triggerUserId: string,
+  chatId: string,
+  command: string
+) {
+  // 先通知聊天室"AI 正在思考"
+  io.to(`chat:${chatId}`).emit('ai_thinking', { chatId });
+
+  try {
+    // 1. 读取触发者的 AI 配置
+    const aiConfig = await prisma.userAIConfig.findUnique({
+      where: { userId: triggerUserId },
+    });
+
+    if (!aiConfig) {
+      // 没有配置 AI → 发一条提示消息
+      const noConfigMsg = await prisma.message.create({
+        data: {
+          content: '你还没有配置 AI 服务，请点击页面右上角的「AI 设置」进行配置后再试。',
+          type: 'AI_SUMMARY',
+          senderId: triggerUserId,  // 用触发者的 ID（因为没有系统用户）
+          chatId,
+        },
+        include: {
+          sender: { select: { id: true, username: true, avatar: true } },
+        },
+      });
+      io.to(`chat:${chatId}`).emit('new_message', { message: noConfigMsg });
+      return;
+    }
+
+    // 2. 获取最近 30 条聊天记录作为上下文
+    const recentMessages = await prisma.message.findMany({
+      where: { chatId, type: 'TEXT' },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+      include: {
+        sender: { select: { username: true } },
+      },
+    });
+
+    recentMessages.reverse();
+
+    // 3. 调用 AI API
+    const aiResponse = await callAI({
+      provider: aiConfig.provider,
+      model: aiConfig.model,
+      apiKey: aiConfig.apiKey,
+      baseUrl: aiConfig.baseUrl || undefined,
+      command,
+      chatContext: recentMessages.map((m) => ({
+        sender: m.sender.username,
+        content: m.content,
+        time: m.createdAt.toLocaleString('zh-CN'),
+      })),
+    });
+
+    // 4. 把 AI 回复保存为消息并广播
+    const aiMessage = await prisma.message.create({
+      data: {
+        content: aiResponse,
+        type: 'AI_SUMMARY',
+        senderId: triggerUserId,
+        chatId,
+      },
+      include: {
+        sender: { select: { id: true, username: true, avatar: true } },
+      },
+    });
+
+    // 更新聊天的 updatedAt
+    await prisma.chat.update({
+      where: { id: chatId },
+      data: { updatedAt: new Date() },
+    });
+
+    io.to(`chat:${chatId}`).emit('new_message', { message: aiMessage });
+
+    // 5. 同时保存到 AISummary 表（用于历史记录）
+    await prisma.aISummary.create({
+      data: {
+        chatId,
+        triggeredById: triggerUserId,
+        messageCount: recentMessages.length,
+        content: { text: aiResponse, command },
+      },
+    });
+
+    console.log(`AI 回复已发送到聊天 ${chatId}`);
+  } catch (err: any) {
+    console.error('AI 调用失败:', err);
+
+    // 发送错误提示到聊天
+    const errorMsg = await prisma.message.create({
+      data: {
+        content: `AI 调用失败：${err.message || '未知错误'}。请检查 AI 设置中的 API Key 和模型配置。`,
+        type: 'AI_SUMMARY',
+        senderId: triggerUserId,
+        chatId,
+      },
+      include: {
+        sender: { select: { id: true, username: true, avatar: true } },
+      },
+    });
+    io.to(`chat:${chatId}`).emit('new_message', { message: errorMsg });
+  } finally {
+    // 通知"AI 思考完毕"
+    io.to(`chat:${chatId}`).emit('ai_thinking_done', { chatId });
+  }
 }

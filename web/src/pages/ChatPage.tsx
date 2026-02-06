@@ -3,7 +3,7 @@
  *
  * 【布局结构】
  * ┌─────────────────────────────────────────────┐
- * │  Header（用户名 + 退出按钮）                  │
+ * │  Header（用户名 + AI设置 + 退出按钮）         │
  * ├──────────────┬──────────────────────────────┤
  * │              │                              │
  * │  侧边栏       │      聊天窗口                │
@@ -23,6 +23,7 @@ import { useAuthStore } from '../stores/authStore';
 import { getChats, getFriends, getFriendRequests, searchUsers, sendFriendRequest, acceptFriendRequest, rejectFriendRequest, type Chat, type User, type FriendRequest } from '../lib/api';
 import { getSocket } from '../lib/socket';
 import ChatWindow from '../components/ChatWindow';
+import AISettings from '../components/AISettings';
 
 export default function ChatPage() {
   const { user, logout } = useAuthStore();
@@ -36,6 +37,9 @@ export default function ChatPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<User[]>([]);
 
+  // AI 设置弹窗
+  const [showAISettings, setShowAISettings] = useState(false);
+
   const selectedChat = chats.find((c) => c.id === selectedChatId);
 
   // ========== 加载数据 ==========
@@ -46,18 +50,28 @@ export default function ChatPage() {
     loadFriendRequests();
   }, []);
 
-  // 监听 WebSocket 的 new_message 事件，更新聊天列表
+  // 监听 WebSocket 事件
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
 
+    // 收到新消息时刷新聊天列表
     const handleNewMessage = () => {
-      loadChats(); // 收到新消息时刷新列表
+      loadChats();
+    };
+
+    // 新聊天被创建（好友接受后），刷新聊天列表
+    const handleNewChat = () => {
+      loadChats();
+      loadFriends();
     };
 
     socket.on('new_message', handleNewMessage);
+    socket.on('new_chat_created', handleNewChat);
+
     return () => {
       socket.off('new_message', handleNewMessage);
+      socket.off('new_chat_created', handleNewChat);
     };
   }, []);
 
@@ -141,6 +155,14 @@ export default function ChatPage() {
       <header className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-4 shrink-0">
         <h1 className="text-lg font-bold text-gray-800">ChatGroup</h1>
         <div className="flex items-center gap-3">
+          {/* AI 设置按钮 */}
+          <button
+            onClick={() => setShowAISettings(true)}
+            className="text-sm text-gray-500 hover:text-purple-600 transition-colors"
+            title="AI 设置"
+          >
+            AI 设置
+          </button>
           <span className="text-sm text-gray-600">{user?.username}</span>
           <button
             onClick={logout}
@@ -325,6 +347,11 @@ export default function ChatPage() {
           )}
         </main>
       </div>
+
+      {/* ========== AI 设置弹窗 ========== */}
+      {showAISettings && (
+        <AISettings onClose={() => setShowAISettings(false)} />
+      )}
     </div>
   );
 }

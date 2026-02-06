@@ -8,6 +8,7 @@ import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
 import friendRoutes from './routes/friends';
 import chatRoutes from './routes/chats';
+import aiRoutes from './routes/ai';
 import { setupSocket } from './socket/handler';
 
 // 加载 .env 配置文件
@@ -47,6 +48,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/friends', friendRoutes);
 app.use('/api/chats', chatRoutes);
+app.use('/api/ai', aiRoutes);  // AI 总结 + 配置
 
 // 健康检查接口 — 用来测试服务器是否正常运行
 app.get('/api/health', (_req, res) => {

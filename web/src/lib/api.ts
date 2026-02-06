@@ -106,6 +106,23 @@ export async function getMessages(chatId: string, before?: string) {
   return data.messages as Message[];
 }
 
+// ========== AI API ==========
+
+export async function getAIProviders() {
+  const { data } = await api.get('/ai/providers');
+  return data.providers as AIProvider[];
+}
+
+export async function getAIConfig() {
+  const { data } = await api.get('/ai/config');
+  return data.config as AIConfig | null;
+}
+
+export async function saveAIConfig(config: { provider: string; model: string; apiKey: string; baseUrl?: string }) {
+  const { data } = await api.put('/ai/config', config);
+  return data.config as AIConfig;
+}
+
 // ========== 类型定义 ==========
 
 export interface User {
@@ -150,3 +167,25 @@ export interface Message {
   sender: { id: string; username: string; avatar: string | null };
   createdAt: string;
 }
+
+export interface AIModel {
+  id: string;
+  name: string;
+}
+
+export interface AIProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  models: AIModel[];
+  format: 'openai' | 'anthropic';
+  note?: string;
+}
+
+export interface AIConfig {
+  provider: string;
+  model: string;
+  apiKey: string;  // 脱敏后的
+  baseUrl: string | null;
+}
+
