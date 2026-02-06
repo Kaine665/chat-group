@@ -333,7 +333,7 @@ export default function ChatPage() {
         </aside>
 
         {/* ========== 聊天窗口 ========== */}
-        <main className="flex-1 flex flex-col">
+        <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {selectedChat ? (
             <ChatWindow
               chat={selectedChat}
