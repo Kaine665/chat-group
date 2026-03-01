@@ -2,7 +2,9 @@
 # GitHub Actions — 自动构建 Docker 镜像
 #
 # 【触发时机】
-# 推送到 main 分支时自动构建，构建完成后推送镜像到 GitHub Container Registry (ghcr.io)
+# - 推送到 main 分支 → 构建生产镜像（标签 latest + commit sha）
+# - 推送到 dev 分支  → 构建开发镜像（标签 dev + commit sha）
+# - 手动触发 workflow_dispatch
 #
 # 【什么是 GitHub Container Registry？】
 # GitHub 提供的免费 Docker 镜像仓库。
@@ -10,18 +12,17 @@
 # 你的服务器可以直接 docker pull 拉取。
 #
 # 【流程】
-# 1. 推送代码到 main → 自动触发
+# 1. 推送代码到 main/dev → 自动触发
 # 2. GitHub 服务器编译前端和后端 Docker 镜像
-# 3. 推送镜像到 ghcr.io
-# 4. 你在服务器上 docker compose pull && docker compose up -d 即可更新
+# 3. 推送镜像到 ghcr.io（根据分支打不同的标签）
+# 4. 服务器上 docker compose pull && docker compose up -d 即可更新
 # ============================================================
 
 name: Build Docker Images
 
 on:
   push:
-    branches: [main]
-  # 也可以手动触发
+    branches: [main, dev]
   workflow_dispatch:
 
 env:
@@ -46,13 +47,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 根据分支决定镜像标签：main → latest，dev → dev
+      - name: Determine image tags
+        id: tags
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "tag=dev" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build and push server image
         uses: docker/build-push-action@v5
         with:
           context: ./server
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}-server:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}-server:${{ steps.tags.outputs.tag }}
             ${{ env.REGISTRY }}/${{ github.repository }}-server:${{ github.sha }}
 
   build-web:
@@ -73,11 +84,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 根据分支决定镜像标签：main → latest，dev → dev
+      - name: Determine image tags
+        id: tags
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "tag=dev" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build and push web image
         uses: docker/build-push-action@v5
         with:
           context: ./web
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository }}-web:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}-web:${{ steps.tags.outputs.tag }}
             ${{ env.REGISTRY }}/${{ github.repository }}-web:${{ github.sha }}
