@@ -1,0 +1,71 @@
+# ============================================================
+# Docker Compose — 开发环境
+#
+# 和生产环境完全隔离：独立的数据库、Redis、不同的端口。
+# 可以和生产环境同时运行，互不干扰。
+#
+# 【使用方法】
+# 启动：docker compose -f docker-compose.dev.yml up -d
+# 停止：docker compose -f docker-compose.dev.yml down
+# 查看日志：docker compose -f docker-compose.dev.yml logs -f
+# 重建：docker compose -f docker-compose.dev.yml up -d --build
+#
+# 或者用 Makefile 简化：
+# make dev-up / make dev-down / make dev-logs
+# ============================================================
+
+services:
+  # ========== 开发数据库（独立于生产）==========
+  db-dev:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chatgroup
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev123}
+      POSTGRES_DB: chatgroup_dev
+    volumes:
+      - postgres_data_dev:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"   # 映射到 5433，避免和生产的 5432 冲突
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatgroup"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ========== 开发 Redis（独立于生产）==========
+  redis-dev:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data_dev:/data
+    ports:
+      - "6380:6379"   # 映射到 6380，避免和生产的 6379 冲突
+
+  # ========== 后端 API + WebSocket（开发模式）==========
+  server-dev:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://chatgroup:${DB_PASSWORD:-dev123}@db-dev:5432/chatgroup_dev
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-key-do-not-use-in-production}
+      PORT: "3000"
+      NODE_ENV: development
+    depends_on:
+      db-dev:
+        condition: service_healthy
+    ports:
+      - "${SERVER_PORT:-3001}:3000"   # 暴露后端端口方便调试
+
+  # ========== 前端（Nginx，开发环境）==========
+  web-dev:
+    build: ./web
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3080}:80"   # 开发环境用 3080 端口
+    depends_on:
+      - server-dev
+
+volumes:
+  postgres_data_dev:    # 开发数据库数据（和生产的 postgres_data 完全独立）
+  redis_data_dev:       # 开发 Redis 数据（和生产的 redis_data 完全独立）
